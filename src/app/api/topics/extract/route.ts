@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     const extracted = await extractTopicsFromSyllabus(fullSyllabusText);
 
     // 3. Resolve or create subject
-    let subjectId = existingSubjectId;
+    let subjectId = existingSubjectId || doc.subject_id;
     if (!subjectId) {
       const { data: newSubject, error: subError } = await supabase
         .from('subjects')

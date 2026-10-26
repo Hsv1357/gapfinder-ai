@@ -15,6 +15,7 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const file = formData.get('file') as File | null;
     const subjectId = formData.get('subject_id') as string | null;
+    const cleanSubjectId = subjectId && subjectId.trim() !== '' && subjectId !== 'none' ? subjectId.trim() : null;
     const fileType = (formData.get('file_type') as FileType) || 'notes';
     const customTitle = formData.get('title') as string | null;
 
@@ -70,7 +71,7 @@ export async function POST(req: NextRequest) {
       .from('documents')
       .insert({
         user_id: user.id,
-        subject_id: subjectId || null,
+        subject_id: cleanSubjectId,
         title: docTitle,
         file_name: fileName,
         file_type: fileType,
@@ -147,7 +148,7 @@ export async function POST(req: NextRequest) {
       chunkRecords.push({
         document_id: documentId,
         user_id: user.id,
-        subject_id: subjectId || null,
+        subject_id: cleanSubjectId,
         chunk_index: c.chunkIndex,
         page_number: c.pageNumber,
         section_title: c.sectionTitle,

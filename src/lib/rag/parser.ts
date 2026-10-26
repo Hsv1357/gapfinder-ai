@@ -1,4 +1,5 @@
 import { RawPageText } from './chunking';
+import { extractText } from 'unpdf';
 
 /**
  * Extracts page text from raw text or markdown.
@@ -43,8 +44,9 @@ export function parsePlainText(content: string): RawPageText[] {
 }
 
 /**
- * Server-compatible PDF text extractor using pdf.js legacy/server build.
- * Avoids browser-only DOMMatrix references and extracts clean page-by-page text with metadata.
+ * Server-compatible PDF text extractor using unpdf.
+ * Completely eliminates browser DOMMatrix and external pdf.worker.mjs chunk loading failures
+ * across all Node.js and Next.js Turbopack development and production runtimes.
  */
 export async function parsePdfBuffer(
   buffer: Buffer
@@ -60,58 +62,23 @@ export async function parsePdfBuffer(
   }
 
   try {
-    // Dynamic import of pdfjs-dist legacy build (Node.js server-compatible without DOMMatrix)
-    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-
     const data = new Uint8Array(buffer);
-    const loadingTask = pdfjs.getDocument({
-      data,
-      useSystemFonts: true,
-      disableFontFace: true,
-    });
+    const { totalPages, text: pageTexts } = await extractText(data, { mergePages: false });
 
-    const doc = await loadingTask.promise;
-    const totalPages = doc.numPages;
-
-    if (totalPages === 0) {
+    if (!totalPages || totalPages === 0 || !pageTexts || pageTexts.length === 0) {
       throw new Error('Empty PDF: The document contains 0 pages.');
     }
 
     const pages: RawPageText[] = [];
 
-    for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
-      const page = await doc.getPage(pageNum);
-      const textContent = await page.getTextContent();
+    for (let i = 0; i < pageTexts.length; i++) {
+      const pageNum = i + 1;
+      const rawText = (pageTexts[i] || '').trim();
 
-      let lastY: number | null = null;
-      let pageText = '';
-
-      for (const item of textContent.items) {
-        if ('str' in item) {
-          const str = (item as any).str;
-          const transform = (item as any).transform;
-
-          if (transform && Array.isArray(transform) && transform.length >= 6) {
-            const currentY = transform[5];
-            if (lastY !== null && Math.abs(lastY - currentY) > 5) {
-              pageText += '\n';
-            } else if (pageText && !pageText.endsWith(' ') && !pageText.endsWith('\n')) {
-              pageText += ' ';
-            }
-            lastY = currentY;
-          } else if (pageText && !pageText.endsWith(' ') && !pageText.endsWith('\n')) {
-            pageText += ' ';
-          }
-
-          pageText += str;
-        }
-      }
-
-      const trimmedText = pageText.trim();
-      if (trimmedText.length > 0) {
+      if (rawText.length > 0) {
         pages.push({
           pageNumber: pageNum,
-          text: trimmedText,
+          text: rawText,
         });
       }
     }
@@ -128,13 +95,17 @@ export async function parsePdfBuffer(
       totalPages,
     };
   } catch (error: any) {
-    // Handle standard PDF.js exceptions
-    if (error.name === 'PasswordException') {
+    if (error.name === 'PasswordException' || error.message?.toLowerCase().includes('password')) {
       throw new Error(
         'This PDF is password-protected or encrypted. Please remove password encryption before uploading.'
       );
     }
-    if (error.name === 'InvalidPDFException' || error.name === 'FormatError') {
+    if (
+      error.name === 'InvalidPDFException' ||
+      error.name === 'FormatError' ||
+      error.message?.includes('Invalid PDF') ||
+      error.message?.includes('corrupt')
+    ) {
       throw new Error(
         'Corrupt or invalid PDF file: The PDF structure is damaged or cannot be parsed.'
       );
@@ -144,6 +115,7 @@ export async function parsePdfBuffer(
     if (
       error.message?.includes('scanned image') ||
       error.message?.includes('Empty file') ||
+      error.message?.includes('Empty PDF') ||
       error.message?.includes('Invalid PDF format')
     ) {
       throw error;
