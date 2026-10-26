@@ -104,14 +104,54 @@ export async function POST(
       })
       .eq('id', quizId);
 
-    // 5. Update Topic Mastery if quiz was associated with a specific topic
-    if (quiz.topic_id) {
+    // 5. Update Topic Mastery and Gap Report
+    let targetTopicId = quiz.topic_id;
+    let topicTitle = quiz.topics?.title;
+
+    if (!targetTopicId && quiz.subject_id) {
+      // Find an existing topic in this subject
+      const { data: subjectTopics } = await supabase
+        .from('topics')
+        .select('id, title')
+        .eq('subject_id', quiz.subject_id)
+        .eq('user_id', user.id)
+        .in('level', ['topic', 'subtopic'])
+        .limit(1);
+
+      if (subjectTopics && subjectTopics.length > 0) {
+        targetTopicId = subjectTopics[0].id;
+        topicTitle = subjectTopics[0].title;
+      } else {
+        // Create an initial topic representing this assessed material
+        const cleanTitle = quiz.title.replace(/^Diagnostic Quiz:\s*/i, '');
+        const { data: newTopic } = await supabase
+          .from('topics')
+          .insert({
+            user_id: user.id,
+            subject_id: quiz.subject_id,
+            title: cleanTitle,
+            level: 'topic',
+            order_index: 1,
+            estimated_importance: 'high',
+          })
+          .select()
+          .single();
+
+        if (newTopic) {
+          targetTopicId = newTopic.id;
+          topicTitle = newTopic.title;
+          await supabase.from('quizzes').update({ topic_id: targetTopicId }).eq('id', quizId);
+        }
+      }
+    }
+
+    if (targetTopicId) {
       // Fetch all historical quiz answers for this topic
       const { data: pastAnswers } = await supabase
         .from('quiz_answers')
         .select('score, max_score, submitted_at, quiz_id, quiz_questions(difficulty)')
         .eq('user_id', user.id)
-        .eq('quiz_questions.topic_id', quiz.topic_id);
+        .eq('quiz_questions.topic_id', targetTopicId);
 
       const attempts = (pastAnswers || []).map((a: any) => ({
         quizId: a.quiz_id,
@@ -121,8 +161,16 @@ export async function POST(
         date: a.submitted_at,
       }));
 
-      const topicTitle = quiz.topics?.title || 'Course Topic';
-      const gapAnalysis = classifyTopicMastery(topicTitle, attempts);
+      // Ensure the current attempt is represented
+      attempts.push({
+        quizId,
+        score: totalPointsEarned,
+        maxScore: maxTotalPoints,
+        difficulty: 'medium',
+        date: completedAt,
+      });
+
+      const gapAnalysis = classifyTopicMastery(topicTitle || 'Course Topic', attempts);
 
       // Upsert topic_mastery
       await supabase
@@ -130,7 +178,7 @@ export async function POST(
         .upsert(
           {
             user_id: user.id,
-            topic_id: quiz.topic_id,
+            topic_id: targetTopicId,
             subject_id: quiz.subject_id,
             score_percentage: gapAnalysis.scorePercentage,
             classification: gapAnalysis.classification,
@@ -148,7 +196,7 @@ export async function POST(
       // Record in topic mastery history
       await supabase.from('topic_mastery_history').insert({
         user_id: user.id,
-        topic_id: quiz.topic_id,
+        topic_id: targetTopicId,
         score_percentage: gapAnalysis.scorePercentage,
         classification: gapAnalysis.classification,
         recorded_at: completedAt,

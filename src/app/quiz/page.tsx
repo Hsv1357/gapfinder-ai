@@ -4,16 +4,13 @@ import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { 
-  CheckCircle2, 
   AlertCircle, 
   BookOpen, 
   Sparkles, 
   RefreshCw, 
   ArrowRight, 
   FileCheck, 
-  HelpCircle,
-  Award,
-  ChevronLeft
+  Award
 } from 'lucide-react';
 import Navbar from '@/components/layout/Navbar';
 import { Quiz, QuizQuestion, RubricFeedback } from '@/types/database';
@@ -21,9 +18,14 @@ import { Quiz, QuizQuestion, RubricFeedback } from '@/types/database';
 function QuizContent() {
   const searchParams = useSearchParams();
   const preselectedTopicId = searchParams.get('topicId');
+  const preselectedDocId = searchParams.get('documentId');
 
+  const [documents, setDocuments] = useState<any[]>([]);
   const [topics, setTopics] = useState<any[]>([]);
+  const [diagnoseMode, setDiagnoseMode] = useState<'document' | 'topic'>('document');
+  const [selectedDocId, setSelectedDocId] = useState<string>(preselectedDocId || '');
   const [selectedTopicId, setSelectedTopicId] = useState<string>(preselectedTopicId || '');
+  const [loadingInitial, setLoadingInitial] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [activeQuiz, setActiveQuiz] = useState<Quiz | null>(null);
@@ -33,25 +35,47 @@ function QuizContent() {
   const [finalScore, setFinalScore] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Fetch topic list for dropdown
+  // Fetch ready documents and extracted topics
   useEffect(() => {
-    fetch('/api/topics')
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.flatList) {
-          const actionables = data.flatList.filter((t: any) => t.level === 'topic' || t.level === 'subtopic');
+    Promise.all([
+      fetch('/api/materials').then((r) => r.json()).catch(() => ({})),
+      fetch('/api/topics').then((r) => r.json()).catch(() => ({})),
+    ])
+      .then(([matData, topData]) => {
+        // Only allow documents that are ready and contain text chunks
+        const readyDocs = (matData.documents || []).filter(
+          (d: any) => d.processing_status === 'ready' && (d.total_chunks > 0 || d.total_pages > 0)
+        );
+        setDocuments(readyDocs);
+        if (readyDocs.length > 0 && !selectedDocId) {
+          setSelectedDocId(preselectedDocId || readyDocs[0].id);
+        }
+
+        if (topData.flatList) {
+          const actionables = topData.flatList.filter((t: any) => t.level === 'topic' || t.level === 'subtopic');
           setTopics(actionables);
-          if (!selectedTopicId && actionables.length > 0) {
-            setSelectedTopicId(actionables[0].id);
+          if (actionables.length > 0 && !selectedTopicId) {
+            setSelectedTopicId(preselectedTopicId || actionables[0].id);
           }
         }
+
+        // If no ready documents but topics exist, default to topic mode
+        if (readyDocs.length === 0 && topData.flatList && topData.flatList.length > 0) {
+          setDiagnoseMode('topic');
+        }
       })
-      .catch((e) => console.error('Failed to load topics:', e));
+      .finally(() => setLoadingInitial(false));
   }, []);
 
   const handleGenerateQuiz = async () => {
-    if (!selectedTopicId) {
-      setErrorMsg('Please select a topic to diagnose.');
+    if (generating) return;
+
+    if (diagnoseMode === 'document' && !selectedDocId) {
+      setErrorMsg('Please select a ready document to diagnose.');
+      return;
+    }
+    if (diagnoseMode === 'topic' && !selectedTopicId) {
+      setErrorMsg('Please select a curriculum topic to diagnose.');
       return;
     }
 
@@ -61,14 +85,21 @@ function QuizContent() {
     setAnswers({});
 
     try {
+      const payload: any = {
+        numMCQ: 3,
+        numShortAnswer: 2,
+      };
+
+      if (diagnoseMode === 'document') {
+        payload.documentId = selectedDocId;
+      } else {
+        payload.topicId = selectedTopicId;
+      }
+
       const res = await fetch('/api/quiz/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          topicId: selectedTopicId,
-          numMCQ: 3,
-          numShortAnswer: 2,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
 
@@ -142,7 +173,7 @@ function QuizContent() {
           </div>
         )}
 
-        {/* Phase 1: Topic Selection Card (if no active quiz) */}
+        {/* Phase 1: Assessment Target Selection Card (if no active quiz) */}
         {!activeQuiz && (
           <div className="mt-8 glass-panel p-6 sm:p-8 rounded-2xl border border-slate-800">
             <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
@@ -150,58 +181,152 @@ function QuizContent() {
               <span>Configure Diagnostic Assessment</span>
             </h3>
             <p className="text-xs text-slate-400 mb-6">
-              Select any topic from your uploaded syllabus. The RAG pipeline will retrieve supporting passages and formulate test questions.
+              Synthesizes diagnostic questions strictly from your uploaded course materials. Refuses to use pre-written mock questions.
             </p>
 
-            <div className="space-y-4 max-w-lg">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Select Topic to Diagnose
-                </label>
-                {topics.length > 0 ? (
-                  <select
-                    value={selectedTopicId}
-                    onChange={(e) => setSelectedTopicId(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 text-sm rounded-xl px-3.5 py-2.5 text-slate-200 focus:outline-none focus:border-indigo-500"
-                  >
-                    {topics.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.title} ({t.mastery?.classification || 'not assessed'})
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <p className="text-xs text-slate-500 py-2">
-                    No curriculum topics found. Please upload a syllabus on the Materials page or click &quot;Seed Demo Data&quot; in the navigation.
-                  </p>
-                )}
+            {loadingInitial ? (
+              <div className="py-12 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+                <RefreshCw className="w-4 h-4 animate-spin text-indigo-400" />
+                <span>Checking indexed documents and curriculum topics...</span>
               </div>
-
-              <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 text-xs text-slate-400 space-y-1">
-                <p className="font-semibold text-slate-300">Format: 3 Multiple Choice + 2 Conceptual Short-Answer</p>
-                <p className="text-[11px] text-slate-500">
-                  Expected answers remain hidden on the server until your submission is locked and evaluated.
+            ) : documents.length === 0 && topics.length === 0 ? (
+              <div className="p-8 rounded-2xl bg-slate-900/60 border border-slate-800 text-center space-y-3">
+                <FileCheck className="w-10 h-10 text-slate-500 mx-auto" />
+                <h4 className="text-sm font-semibold text-white">No Study Materials Ready for Diagnosis</h4>
+                <p className="text-xs text-slate-400 max-w-md mx-auto">
+                  To start a source-grounded diagnostic quiz, please upload a syllabus, lecture notes, or textbook chapter on the Materials page.
                 </p>
+                <div className="pt-2">
+                  <Link
+                    href="/materials"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
+                  >
+                    <span>Upload Study Materials</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+                </div>
               </div>
+            ) : (
+              <div className="space-y-5 max-w-lg">
+                {/* Mode Selector Tabs (Document vs Topic) */}
+                <div className="flex items-center gap-2 p-1 bg-slate-900/90 rounded-xl border border-slate-800 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setDiagnoseMode('document')}
+                    className={`flex-1 py-1.5 px-3 rounded-lg font-medium transition-all flex items-center justify-center gap-1.5 ${
+                      diagnoseMode === 'document'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <BookOpen className="w-3.5 h-3.5" />
+                    <span>Diagnose by Document ({documents.length})</span>
+                  </button>
 
-              <button
-                onClick={handleGenerateQuiz}
-                disabled={generating || !selectedTopicId}
-                className="w-full py-3 px-4 rounded-xl font-semibold text-sm text-white bg-indigo-600 hover:bg-indigo-500 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                {generating ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Retrieving Passages & Generating Grounded Questions...</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4" />
-                    <span>Begin Diagnostic Quiz</span>
-                  </>
+                  <button
+                    type="button"
+                    onClick={() => setDiagnoseMode('topic')}
+                    className={`flex-1 py-1.5 px-3 rounded-lg font-medium transition-all flex items-center justify-center gap-1.5 ${
+                      diagnoseMode === 'topic'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Award className="w-3.5 h-3.5" />
+                    <span>Diagnose by Topic ({topics.length})</span>
+                  </button>
+                </div>
+
+                {/* Document Selector */}
+                {diagnoseMode === 'document' && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                      Select Ready Uploaded Document
+                    </label>
+                    {documents.length > 0 ? (
+                      <select
+                        value={selectedDocId}
+                        onChange={(e) => setSelectedDocId(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 text-sm rounded-xl px-3.5 py-2.5 text-slate-200 focus:outline-none focus:border-indigo-500"
+                      >
+                        {documents.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.title} • {d.total_chunks} chunks ({d.total_pages || 1} pages)
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 text-xs text-slate-400">
+                        No fully indexed documents found yet.{' '}
+                        <Link href="/materials" className="text-indigo-400 underline font-medium">
+                          Upload a document
+                        </Link>{' '}
+                        to diagnose.
+                      </div>
+                    )}
+                  </div>
                 )}
-              </button>
-            </div>
+
+                {/* Topic Selector */}
+                {diagnoseMode === 'topic' && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                      Select Curriculum Topic
+                    </label>
+                    {topics.length > 0 ? (
+                      <select
+                        value={selectedTopicId}
+                        onChange={(e) => setSelectedTopicId(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 text-sm rounded-xl px-3.5 py-2.5 text-slate-200 focus:outline-none focus:border-indigo-500"
+                      >
+                        {topics.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.title} ({t.mastery?.classification || 'not assessed'})
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 text-xs text-slate-400">
+                        No curriculum topics extracted yet.{' '}
+                        <Link href="/materials" className="text-indigo-400 underline font-medium">
+                          Extract topics from your syllabus
+                        </Link>{' '}
+                        or switch to &quot;Diagnose by Document&quot; above.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 text-xs text-slate-400 space-y-1">
+                  <p className="font-semibold text-slate-300">Format: 3 Multiple Choice + 2 Conceptual Short-Answer</p>
+                  <p className="text-[11px] text-slate-500">
+                    Questions cite specific source passages. Correct answers remain securely on the server until submission.
+                  </p>
+                </div>
+
+                <button
+                  onClick={handleGenerateQuiz}
+                  disabled={
+                    generating ||
+                    (diagnoseMode === 'document' && !selectedDocId) ||
+                    (diagnoseMode === 'topic' && !selectedTopicId)
+                  }
+                  className="w-full py-3 px-4 rounded-xl font-semibold text-sm text-white bg-indigo-600 hover:bg-indigo-500 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {generating ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Retrieving Passages & Generating Grounded Questions...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4" />
+                      <span>Begin Diagnostic Quiz</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
           </div>
         )}
 

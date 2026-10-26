@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { query, subjectId, topicId } = await req.json();
+    const { query, subjectId } = await req.json();
 
     if (!query || !query.trim()) {
       return NextResponse.json({ error: 'Please enter a topic or question to explain.' }, { status: 400 });

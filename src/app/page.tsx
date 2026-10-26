@@ -254,7 +254,7 @@ export default function LandingPage() {
             <span className="text-xs text-slate-500">— Intelligent Learning Diagnosis</span>
           </div>
           <p className="text-xs text-slate-500">
-            Powered by Next.js App Router, Supabase pgvector, and Google Gemini API.
+            Founder: Srivignesh
           </p>
         </div>
       </footer>

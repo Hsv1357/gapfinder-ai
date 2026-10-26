@@ -60,6 +60,7 @@ export default function MaterialsPage() {
   const [loading, setLoading] = useState(true);
   const [isUploadingBatch, setIsUploadingBatch] = useState(false);
   const [extractingId, setExtractingId] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   // Subject filter for document library
   const [selectedLibrarySubject, setSelectedLibrarySubject] = useState<string>('all');
@@ -368,6 +369,32 @@ export default function MaterialsPage() {
       setGlobalError(err.message || 'Extraction error');
     } finally {
       setExtractingId(null);
+    }
+  };
+
+  const handleRetryDocument = async (docId: string) => {
+    setRetryingId(docId);
+    setGlobalError(null);
+    setGlobalSuccess(null);
+
+    try {
+      const res = await fetch('/api/materials/retry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentId: docId }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setGlobalError(data.error || 'Failed to retry extraction.');
+      } else {
+        setGlobalSuccess('Document successfully re-extracted and indexed into vector store!');
+        await fetchDocuments();
+      }
+    } catch (err: any) {
+      setGlobalError(err.message || 'Retry error');
+    } finally {
+      setRetryingId(null);
     }
   };
 
@@ -842,6 +869,18 @@ export default function MaterialsPage() {
                           >
                             <Map className="w-3.5 h-3.5" />
                             <span>{extractingId === doc.id ? 'Extracting...' : 'Extract Topics'}</span>
+                          </button>
+                        )}
+
+                        {doc.processing_status === 'error' && (
+                          <button
+                            onClick={() => handleRetryDocument(doc.id)}
+                            disabled={retryingId === doc.id}
+                            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 transition-all flex items-center gap-1.5 disabled:opacity-50"
+                            title="Retry document extraction and chunking"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${retryingId === doc.id ? 'animate-spin' : ''}`} />
+                            <span>{retryingId === doc.id ? 'Retrying...' : 'Retry Extraction'}</span>
                           </button>
                         )}
 

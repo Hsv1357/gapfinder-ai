@@ -73,19 +73,17 @@ Please provide a clear, source-grounded explanation with explicit citations.`;
     const lowerAnswer = answer.toLowerCase();
     const hasSufficientEvidence =
       !lowerAnswer.includes('do not contain sufficient evidence') &&
-      !lowerAnswer.includes('could not find relevant passages');
+      !lowerAnswer.includes('could not find relevant passages') &&
+      !lowerAnswer.includes('insufficient evidence');
 
     return {
       answer,
       hasSufficientEvidence,
-      citations,
+      // Only include citations if there is genuine supporting evidence cited
+      citations: hasSufficientEvidence ? citations : [],
     };
   } catch (error: any) {
     console.error('Explanation generation error:', error);
-    return {
-      answer: `An error occurred while generating the grounded explanation: ${error.message}. Please try again shortly.`,
-      hasSufficientEvidence: false,
-      citations,
-    };
+    throw new Error(`AI explanation service error: ${error.message}`);
   }
 }

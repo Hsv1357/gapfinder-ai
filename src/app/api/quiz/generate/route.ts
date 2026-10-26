@@ -10,17 +10,104 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { topicId, subjectId, numMCQ = 3, numShortAnswer = 2 } = await req.json();
+    const { documentId, topicId, subjectId, numMCQ = 3, numShortAnswer = 2 } = await req.json();
 
-    if (!subjectId && !topicId) {
-      return NextResponse.json({ error: 'Please provide either subjectId or topicId.' }, { status: 400 });
+    if (!documentId && !subjectId && !topicId) {
+      return NextResponse.json({ error: 'Please select a document, topic, or subject to generate a quiz.' }, { status: 400 });
     }
 
     let resolvedSubjectId = subjectId;
     let topicTitle = 'Core Curriculum Review';
     let subjectName = 'General Course';
+    let chunks: any[] = [];
 
-    if (topicId) {
+    // Case 1: Diagnose directly by uploaded Document
+    if (documentId) {
+      const { data: doc, error: docError } = await supabase
+        .from('documents')
+        .select('*, subjects(id, name)')
+        .eq('id', documentId)
+        .eq('user_id', user.id)
+        .single();
+
+      if (docError || !doc) {
+        return NextResponse.json({ error: 'Selected document not found.' }, { status: 404 });
+      }
+
+      if (doc.processing_status !== 'ready') {
+        return NextResponse.json({
+          error: `Document "${doc.title}" is currently "${doc.processing_status}". Only ready documents can be used for diagnostic quizzes.`,
+        }, { status: 400 });
+      }
+
+      topicTitle = doc.title;
+      subjectName = doc.subjects?.name || doc.title;
+      resolvedSubjectId = doc.subject_id;
+
+      // Ensure a valid subject exists for relational integrity with quizzes.subject_id
+      if (!resolvedSubjectId) {
+        const { data: existingSub } = await supabase
+          .from('subjects')
+          .select('id, name')
+          .eq('user_id', user.id)
+          .limit(1);
+
+        if (existingSub && existingSub.length > 0) {
+          resolvedSubjectId = existingSub[0].id;
+        } else {
+          const { data: newSub } = await supabase
+            .from('subjects')
+            .insert({
+              user_id: user.id,
+              name: doc.title,
+            })
+            .select()
+            .single();
+          resolvedSubjectId = newSub?.id;
+        }
+
+        if (resolvedSubjectId) {
+          await supabase.from('documents').update({ subject_id: resolvedSubjectId }).eq('id', documentId);
+        }
+      }
+
+      // Fetch chunks belonging directly to this document
+      const { data: docChunks, error: docChunksError } = await supabase
+        .from('document_chunks')
+        .select('*')
+        .eq('document_id', documentId)
+        .order('chunk_index', { ascending: true });
+
+      if (docChunksError || !docChunks || docChunks.length === 0) {
+        return NextResponse.json({
+          error: `Document "${doc.title}" contains no processed vector chunks. Please re-upload or retry extraction.`,
+        }, { status: 422 });
+      }
+
+      // Select representative chunks across the document (up to 8 chunks)
+      const maxChunksToUse = 8;
+      let sampledChunks: any[] = [];
+      if (docChunks.length <= maxChunksToUse) {
+        sampledChunks = docChunks;
+      } else {
+        const step = docChunks.length / maxChunksToUse;
+        for (let i = 0; i < maxChunksToUse; i++) {
+          const idx = Math.min(Math.floor(i * step), docChunks.length - 1);
+          sampledChunks.push(docChunks[idx]);
+        }
+      }
+
+      chunks = sampledChunks.map((c: any) => ({
+        id: c.id,
+        document_id: c.document_id,
+        document_title: doc.title,
+        page_number: c.page_number,
+        section_title: c.section_title,
+        content: c.content,
+        similarity: 1.0,
+      }));
+    } else if (topicId) {
+      // Case 2: Diagnose by extracted curriculum Topic
       const { data: topic, error: topicError } = await supabase
         .from('topics')
         .select('*, subjects(id, name)')
@@ -35,7 +122,18 @@ export async function POST(req: NextRequest) {
       topicTitle = topic.title;
       resolvedSubjectId = topic.subject_id;
       subjectName = topic.subjects?.name || subjectName;
+
+      const query = `${topicTitle} key concepts principles definitions examples`;
+      chunks = await retrieveRelevantChunks({
+        userId: user.id,
+        subjectId: resolvedSubjectId,
+        query,
+        matchCount: 6,
+        threshold: 0.4,
+        supabaseClient: supabase,
+      });
     } else {
+      // Case 3: Diagnose by Subject
       const { data: sub } = await supabase
         .from('subjects')
         .select('*')
@@ -45,18 +143,17 @@ export async function POST(req: NextRequest) {
       if (sub) {
         subjectName = sub.name;
       }
-    }
 
-    // 1. Vector Retrieval of source passages
-    const query = `${topicTitle} key concepts principles definitions examples`;
-    const chunks = await retrieveRelevantChunks({
-      userId: user.id,
-      subjectId: resolvedSubjectId,
-      query,
-      matchCount: 6,
-      threshold: 0.4,
-      supabaseClient: supabase,
-    });
+      const query = `${subjectName} core concepts and fundamental topics`;
+      chunks = await retrieveRelevantChunks({
+        userId: user.id,
+        subjectId: resolvedSubjectId,
+        query,
+        matchCount: 6,
+        threshold: 0.4,
+        supabaseClient: supabase,
+      });
+    }
 
     if (chunks.length === 0) {
       return NextResponse.json({

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-server';
-import { TopicMastery } from '@/types/database';
 
 export async function GET(req: NextRequest) {
   try {

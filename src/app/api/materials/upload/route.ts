@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-server';
 import { parsePdfBuffer, parsePlainText } from '@/lib/rag/parser';
 import { chunkDocumentPages } from '@/lib/rag/chunking';
-import { generateEmbedding } from '@/lib/gemini';
+import { generateEmbeddingsBatch } from '@/lib/gemini';
 import { FileType } from '@/types/database';
 
 export async function POST(req: NextRequest) {
@@ -66,28 +66,59 @@ export async function POST(req: NextRequest) {
       console.warn('Supabase storage upload exception:', stErr);
     }
 
-    // 1. Initial insert into documents table
-    const { data: docRecord, error: docInsertError } = await supabase
+    // Check if an existing document with identical file_name exists for user & subject to prevent duplicate document spam
+    let documentId: string;
+    let existingDocQuery = supabase
       .from('documents')
-      .insert({
-        user_id: user.id,
-        subject_id: cleanSubjectId,
-        title: docTitle,
-        file_name: fileName,
-        file_type: fileType,
-        file_size: file.size,
-        storage_path: storagePath,
-        processing_status: 'processing',
-      })
-      .select()
-      .single();
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('file_name', fileName);
 
-    if (docInsertError || !docRecord) {
-      console.error('Document insert error:', docInsertError);
-      return NextResponse.json({ error: 'Failed to create document record.' }, { status: 500 });
+    if (cleanSubjectId) {
+      existingDocQuery = existingDocQuery.eq('subject_id', cleanSubjectId);
     }
 
-    const documentId = docRecord.id;
+    const { data: existingDocs } = await existingDocQuery.limit(1);
+
+    if (existingDocs && existingDocs.length > 0) {
+      documentId = existingDocs[0].id;
+      // Clean up previous chunks before re-processing to prevent duplicate chunks
+      await supabase.from('document_chunks').delete().eq('document_id', documentId);
+      await supabase
+        .from('documents')
+        .update({
+          title: docTitle,
+          file_type: fileType,
+          file_size: file.size,
+          storage_path: storagePath || undefined,
+          processing_status: 'processing',
+          error_message: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', documentId);
+    } else {
+      // 1. Initial insert into documents table
+      const { data: docRecord, error: docInsertError } = await supabase
+        .from('documents')
+        .insert({
+          user_id: user.id,
+          subject_id: cleanSubjectId,
+          title: docTitle,
+          file_name: fileName,
+          file_type: fileType,
+          file_size: file.size,
+          storage_path: storagePath,
+          processing_status: 'processing',
+        })
+        .select()
+        .single();
+
+      if (docInsertError || !docRecord) {
+        console.error('Document insert error:', docInsertError);
+        return NextResponse.json({ error: 'Failed to create document record.' }, { status: 500 });
+      }
+      documentId = docRecord.id;
+    }
 
     // 2. Parse document text
     let pages = [];
@@ -134,29 +165,27 @@ export async function POST(req: NextRequest) {
     // 3. Chunk the pages
     const chunks = chunkDocumentPages(pages, { maxChunkSize: 1000, overlap: 150 });
 
-    // 4. Generate embeddings and prepare database records
-    const chunkRecords = [];
-    for (let i = 0; i < chunks.length; i++) {
-      const c = chunks[i];
-      let embedding: number[] | null = null;
-      try {
-        embedding = await generateEmbedding(c.content);
-      } catch (embErr) {
-        console.warn(`Embedding failed for chunk ${i}, storing without vector:`, embErr);
-      }
-
-      chunkRecords.push({
-        document_id: documentId,
-        user_id: user.id,
-        subject_id: cleanSubjectId,
-        chunk_index: c.chunkIndex,
-        page_number: c.pageNumber,
-        section_title: c.sectionTitle,
-        content: c.content,
-        token_count: c.tokenCount,
-        embedding: embedding,
-      });
+    // 4. Generate embeddings in parallel batches (concurrency: 5)
+    const chunkContents = chunks.map((c) => c.content);
+    let embeddings: (number[] | null)[] = [];
+    try {
+      embeddings = await generateEmbeddingsBatch(chunkContents, 5);
+    } catch (batchErr) {
+      console.warn('Batch embedding generation error, saving chunks with null vectors:', batchErr);
+      embeddings = chunks.map(() => null);
     }
+
+    const chunkRecords = chunks.map((c, i) => ({
+      document_id: documentId,
+      user_id: user.id,
+      subject_id: cleanSubjectId,
+      chunk_index: c.chunkIndex,
+      page_number: c.pageNumber,
+      section_title: c.sectionTitle,
+      content: c.content,
+      token_count: c.tokenCount,
+      embedding: embeddings[i] || null,
+    }));
 
     // 5. Bulk insert chunks
     const { error: chunkInsertError } = await supabase
@@ -181,6 +210,7 @@ export async function POST(req: NextRequest) {
       .from('documents')
       .update({
         processing_status: 'ready',
+        error_message: null,
         total_pages: totalPages,
         total_chunks: chunks.length,
         updated_at: new Date().toISOString(),

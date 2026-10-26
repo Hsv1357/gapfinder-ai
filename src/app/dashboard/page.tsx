@@ -12,7 +12,6 @@ import {
   ArrowRight, 
   TrendingUp, 
   Sparkles,
-  Database,
   RefreshCw,
   FileText
 } from 'lucide-react';
@@ -33,7 +32,6 @@ import {
 export default function DashboardPage() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [seeding, setSeeding] = useState(false);
   const [selectedSubjectId, setSelectedSubjectId] = useState<string>('');
 
   const fetchDashboardData = async (subjectId?: string) => {
@@ -60,20 +58,6 @@ export default function DashboardPage() {
   const handleSubjectChange = (newSubjectId: string) => {
     setSelectedSubjectId(newSubjectId);
     fetchDashboardData(newSubjectId);
-  };
-
-  const handleSeedDemo = async () => {
-    setSeeding(true);
-    try {
-      const res = await fetch('/api/demo/seed', { method: 'POST' });
-      if (res.ok) {
-        await fetchDashboardData();
-      }
-    } catch (err) {
-      console.error('Seed error:', err);
-    } finally {
-      setSeeding(false);
-    }
   };
 
   if (loading && !data) {
@@ -132,16 +116,6 @@ export default function DashboardPage() {
                 ))}
               </select>
             )}
-
-            <button
-              onClick={handleSeedDemo}
-              disabled={seeding}
-              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20 transition-all shrink-0"
-              title="Loads demo Operating Systems course for judging demonstration"
-            >
-              <Database className="w-3.5 h-3.5" />
-              <span>{seeding ? 'Populating...' : 'Seed Demo Course'}</span>
-            </button>
           </div>
         </div>
 
@@ -155,7 +129,7 @@ export default function DashboardPage() {
               <div>
                 <h3 className="text-base font-bold text-white">No course materials uploaded yet</h3>
                 <p className="text-xs text-slate-400">
-                  Upload your syllabus and lecture notes to begin diagnosis, or click &quot;Seed Demo Course&quot; to inspect with pre-built data.
+                  Upload your syllabus and lecture notes to begin diagnosing knowledge gaps.
                 </p>
               </div>
             </div>
@@ -166,13 +140,6 @@ export default function DashboardPage() {
               >
                 Upload Materials
               </Link>
-              <button
-                onClick={handleSeedDemo}
-                disabled={seeding}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 transition-colors shrink-0"
-              >
-                Load Sample Demo
-              </button>
             </div>
           </div>
         )}
@@ -187,12 +154,14 @@ export default function DashboardPage() {
             </div>
             <div className="flex items-baseline gap-2">
               <span className="text-3xl font-extrabold text-white">
-                {metrics.daysToExam !== null ? `${metrics.daysToExam}` : '18'}
+                {metrics.daysToExam !== null ? `${metrics.daysToExam}` : '--'}
               </span>
-              <span className="text-xs text-slate-400">days remaining</span>
+              <span className="text-xs text-slate-400">
+                {metrics.daysToExam !== null ? 'days remaining' : 'No target set'}
+              </span>
             </div>
             <p className="text-[11px] text-slate-500 mt-2 truncate">
-              {metrics.examDate ? `Target: ${metrics.examDate}` : 'Semester Examination'}
+              {metrics.examDate ? `Target: ${metrics.examDate}` : 'No exam date scheduled'}
             </p>
           </div>
 

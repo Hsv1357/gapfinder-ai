@@ -69,6 +69,19 @@ export async function POST(req: NextRequest) {
         .eq('id', documentId);
     }
 
+    // Clean up prior topics extracted from this document to prevent duplicate topic tree creation on retry
+    const { data: priorSources } = await supabase
+      .from('topic_sources')
+      .select('topic_id')
+      .eq('document_id', documentId)
+      .eq('user_id', user.id);
+
+    if (priorSources && priorSources.length > 0) {
+      const priorTopicIds = priorSources.map((s: any) => s.topic_id).filter(Boolean);
+      await supabase.from('topic_sources').delete().eq('document_id', documentId);
+      await supabase.from('topics').delete().in('id', priorTopicIds).eq('user_id', user.id);
+    }
+
     // 4. Save units, topics, and subtopics into `topics` table
     let orderCounter = 1;
     const insertedTopics: any[] = [];

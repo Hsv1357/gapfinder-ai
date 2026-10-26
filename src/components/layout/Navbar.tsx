@@ -15,8 +15,7 @@ import {
   LogOut, 
   Menu, 
   X,
-  Compass,
-  Database
+  Compass
 } from 'lucide-react';
 
 export default function Navbar() {
@@ -24,8 +23,6 @@ export default function Navbar() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [seeding, setSeeding] = useState(false);
-  const [seedMessage, setSeedMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const supabase = createClient();
@@ -47,31 +44,6 @@ export default function Navbar() {
     await supabase.auth.signOut();
     router.push('/');
     router.refresh();
-  };
-
-  const handleLoadDemo = async () => {
-    if (!user) {
-      router.push('/login?redirectTo=/dashboard');
-      return;
-    }
-    setSeeding(true);
-    setSeedMessage(null);
-    try {
-      const res = await fetch('/api/demo/seed', { method: 'POST' });
-      const data = await res.json();
-      if (res.ok) {
-        setSeedMessage('Demo course and diagnostic data loaded!');
-        router.push('/dashboard');
-        router.refresh();
-      } else {
-        setSeedMessage(data.error || 'Failed to load demo data');
-      }
-    } catch (err: any) {
-      setSeedMessage('Failed to connect to seeder');
-    } finally {
-      setSeeding(false);
-      setTimeout(() => setSeedMessage(null), 4000);
-    }
   };
 
   const navItems = [
@@ -129,18 +101,6 @@ export default function Navbar() {
           <div className="hidden md:flex items-center gap-3">
             {user ? (
               <>
-                <button
-                  onClick={handleLoadDemo}
-                  disabled={seeding}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20 transition-all disabled:opacity-50"
-                  title="Seed sample Operating Systems curriculum, quizzes, and gap reports for demo testing"
-                >
-                  <Database className="w-3.5 h-3.5" />
-                  <span>{seeding ? 'Seeding...' : 'Load Demo Data'}</span>
-                </button>
-
-                <div className="h-4 w-px bg-slate-800" />
-
                 <div className="text-right">
                   <p className="text-xs font-medium text-slate-200 truncate max-w-[140px]">{user.email}</p>
                   <p className="text-[10px] text-emerald-400">Authenticated</p>
@@ -174,15 +134,6 @@ export default function Navbar() {
 
           {/* Mobile hamburger */}
           <div className="flex lg:hidden items-center gap-2">
-            {user && (
-              <button
-                onClick={handleLoadDemo}
-                disabled={seeding}
-                className="px-2.5 py-1 text-xs font-medium rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
-              >
-                {seeding ? '...' : 'Demo'}
-              </button>
-            )}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
@@ -191,12 +142,6 @@ export default function Navbar() {
             </button>
           </div>
         </div>
-
-        {seedMessage && (
-          <div className="py-2 text-center text-xs font-medium text-emerald-400 bg-emerald-500/10 border-t border-emerald-500/20">
-            {seedMessage}
-          </div>
-        )}
       </div>
 
       {/* Mobile Drawer */}
