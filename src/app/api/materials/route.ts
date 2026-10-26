@@ -26,7 +26,13 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ documents });
+    const { data: subjects } = await supabase
+      .from('subjects')
+      .select('id, name, code')
+      .eq('user_id', user.id)
+      .order('name');
+
+    return NextResponse.json({ documents: documents || [], subjects: subjects || [] });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
@@ -44,6 +50,22 @@ export async function DELETE(req: NextRequest) {
 
     if (!documentId) {
       return NextResponse.json({ error: 'Missing document id' }, { status: 400 });
+    }
+
+    // Fetch document to check for storage path
+    const { data: doc } = await supabase
+      .from('documents')
+      .select('storage_path')
+      .eq('id', documentId)
+      .eq('user_id', user.id)
+      .single();
+
+    if (doc?.storage_path) {
+      try {
+        await supabase.storage.from('study-materials').remove([doc.storage_path]);
+      } catch (stErr) {
+        console.warn('Storage delete warning:', stErr);
+      }
     }
 
     const { error } = await supabase

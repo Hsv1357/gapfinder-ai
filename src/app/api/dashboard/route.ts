@@ -87,7 +87,7 @@ export async function GET(req: NextRequest) {
     const { data: plans } = await planQuery;
     const activePlan = plans?.[0] || null;
 
-    let examDate = activePlan?.exam_date || subjects?.[0]?.exam_date || null;
+    const examDate = activePlan?.exam_date || subjects?.[0]?.exam_date || null;
     let daysToExam = null;
     if (examDate) {
       const diff = new Date(examDate).getTime() - new Date().setHours(0, 0, 0, 0);
@@ -109,7 +109,7 @@ export async function GET(req: NextRequest) {
     const { data: recentQuizzes } = await quizQuery;
 
     // 6. Topic Mastery History Trend
-    let trendQuery = supabase
+    const trendQuery = supabase
       .from('topic_mastery_history')
       .select('score_percentage, classification, recorded_at')
       .eq('user_id', user.id)

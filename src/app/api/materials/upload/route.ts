@@ -22,16 +22,48 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No file uploaded.' }, { status: 400 });
     }
 
+    const fileName = file.name;
+    const lowerName = fileName.toLowerCase();
+    const isPdf = lowerName.endsWith('.pdf') || file.type === 'application/pdf';
+    const isTxt = lowerName.endsWith('.txt') || file.type === 'text/plain';
+    const isMd = lowerName.endsWith('.md') || file.type === 'text/markdown';
+
+    if (!isPdf && !isTxt && !isMd) {
+      return NextResponse.json({
+        error: `Unsupported file type for "${fileName}". Only PDF (.pdf), Plain Text (.txt), and Markdown (.md) documents are supported.`,
+      }, { status: 400 });
+    }
+
     // File size limit: 25MB
     const MAX_SIZE = 25 * 1024 * 1024;
     if (file.size > MAX_SIZE) {
-      return NextResponse.json({ error: 'File size exceeds maximum 25MB limit.' }, { status: 400 });
+      return NextResponse.json({ error: `File "${fileName}" exceeds maximum 25MB limit.` }, { status: 400 });
     }
 
-    const fileName = file.name;
     const docTitle = customTitle?.trim() || fileName.replace(/\.[^/.]+$/, '');
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
+
+    // Optional upload to Supabase Storage ('study-materials' bucket)
+    let storagePath: string | null = null;
+    try {
+      const sanitizedName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const storageKey = `${user.id}/${Date.now()}_${sanitizedName}`;
+      const { data: storageData, error: storageErr } = await supabase.storage
+        .from('study-materials')
+        .upload(storageKey, buffer, {
+          contentType: file.type || (isPdf ? 'application/pdf' : 'text/plain'),
+          upsert: true,
+        });
+
+      if (!storageErr && storageData) {
+        storagePath = storageData.path;
+      } else if (storageErr) {
+        console.warn('Supabase storage upload notice:', storageErr.message);
+      }
+    } catch (stErr) {
+      console.warn('Supabase storage upload exception:', stErr);
+    }
 
     // 1. Initial insert into documents table
     const { data: docRecord, error: docInsertError } = await supabase
@@ -43,6 +75,7 @@ export async function POST(req: NextRequest) {
         file_name: fileName,
         file_type: fileType,
         file_size: file.size,
+        storage_path: storagePath,
         processing_status: 'processing',
       })
       .select()
