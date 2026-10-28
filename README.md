@@ -205,3 +205,5 @@ To test the application without manually uploading multiple textbooks:
 ## 11. License
 
 Developed for the Capstone Project / College Expo by the GapFinder AI engineering team. All rights reserved.
+
+CI/CD automatic trigger test
